@@ -1,0 +1,31 @@
+# storax-gcc-oracle2-light — C++ oracle on distroless. No interpreter, no shell,
+# no package manager at runtime: just glibc + our binary + the 16.1
+# toolchain. Base gcr.io/distroless/cc-debian13 ships glibc 2.41 (>= the
+# 2.38 the toolchain needs) plus libstdc++/libgcc for our binary.
+FROM debian:trixie-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ binutils libc6-dev linux-libc-dev linux-libc-dev && rm -rf /var/lib/apt/lists/*
+COPY toolchain /opt/gcc-16.1
+COPY oracle.cpp /src/
+# static libstdc++/libgcc so the runtime needs only glibc (distroless/cc has it)
+RUN g++ -std=c++23 -O2 -static-libstdc++ -static-libgcc \
+        -o /oracle /src/oracle.cpp -lpthread
+# build-time proof: reflection must compile with the very toolchain we ship
+RUN printf '#include <meta>\nstatic_assert(^^int==^^int); using T=[:^^int:]; static_assert(__is_same(T,int));\nint main(){}\n' > /t.cpp \
+    && LD_LIBRARY_PATH=/opt/gcc-16.1/lib64 /opt/gcc-16.1/bin/g++ \
+         -std=c++26 -freflection -fsyntax-only /t.cpp
+
+FROM gcr.io/distroless/cc-debian13
+COPY --from=build /oracle /oracle
+COPY --from=build /opt/gcc-16.1 /opt/gcc-16.1
+# ALL x64 + kernel headers, and the uapi tree the multiarch asm/* symlinks
+# point into (asm/errno.h -> ../../../lib/linux/uapi/...) — without the
+# latter those links dangle and standard includes fail
+COPY --from=build /usr/include /usr/include
+COPY --from=build /usr/lib/linux /usr/lib/linux
+# binutils (as, ld) + link objects — needed the moment run:true links
+COPY --from=build /usr/bin/as /usr/bin/ld /usr/bin/
+COPY --from=build /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+ENV ORACLE_PORT=8951
+EXPOSE 8951
+ENTRYPOINT ["/oracle"]

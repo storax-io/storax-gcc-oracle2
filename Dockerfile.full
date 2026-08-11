@@ -1,0 +1,29 @@
+# storax-gcc-oracle2-full — the FULL oracle: stripped Debian runtime with
+# the COMPLETE header set (all x64 + kernel uapi), so any C++26 the model
+# emits compiles. Larger than -light (distroless) but zero assumptions
+# about which standard headers show up. (hs 2026-08-11.)
+#
+# The runtime apt-installs the dev headers NATIVELY — that wires every
+# multiarch/kernel-uapi symlink correctly, which a cross-stage COPY of
+# /usr/include silently breaks (asm/errno.h -> /usr/lib/linux/uapi/...).
+FROM debian:trixie-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY oracle.cpp /src/oracle.cpp
+# static libstdc++/libgcc: the binary depends only on glibc
+RUN g++ -std=c++23 -O2 -static-libstdc++ -static-libgcc \
+        -o /oracle /src/oracle.cpp -lpthread
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        binutils libc6-dev linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY toolchain /opt/gcc-16.1
+COPY --from=build /oracle /oracle
+# build-time proof: reflection must compile with the shipped toolchain
+RUN printf '#include <meta>\nstatic_assert(^^int==^^int); using T=[:^^int:]; static_assert(__is_same(T,int));\nint main(){}\n' > /t.cpp \
+    && LD_LIBRARY_PATH=/opt/gcc-16.1/lib64 /opt/gcc-16.1/bin/g++ \
+         -std=c++26 -freflection -fsyntax-only /t.cpp && rm /t.cpp
+ENV ORACLE_PORT=8951
+EXPOSE 8951
+ENTRYPOINT ["/oracle"]
