@@ -10,6 +10,8 @@ Two images, one source:
   compiles. Headers installed natively at runtime so every multiarch/uapi
   symlink resolves (a cross-stage COPY of `/usr/include` silently dangles
   `asm/errno.h -> /usr/lib/linux/uapi/...`).
+**Status:** `-full` is complete (compile + link + run). `-light` compiles and gates (syntax-only: probes + most gates) at 227 MB; **run:true in -light is WIP** — Debian merged-/usr symlinks vs distroless need the as/ld+crt copy canonicalised. Use `-full` where execution is required.
+
 - **`-light`** (`Dockerfile.light`, distroless): minimal, still trimming.
 
 ## What the rewrite bought (measured, virre)

@@ -1,31 +1,37 @@
-# storax-gcc-oracle2-light — C++ oracle on distroless. No interpreter, no shell,
-# no package manager at runtime: just glibc + our binary + the 16.1
-# toolchain. Base gcr.io/distroless/cc-debian13 ships glibc 2.41 (>= the
-# 2.38 the toolchain needs) plus libstdc++/libgcc for our binary.
+# storax-gcc-oracle2-light — ENLIGHTENED: the runtime carries ONLY the
+# files an actual compile+link+run touches (discovered by strace), plus
+# the full header set (any C++26 needs any header). Nothing unused ships.
+# Meant as the per-exec sandbox base. (hs 2026-08-11.)
 FROM debian:trixie-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        g++ binutils libc6-dev linux-libc-dev linux-libc-dev && rm -rf /var/lib/apt/lists/*
-COPY toolchain /opt/gcc-16.1
-COPY oracle.cpp /src/
-# static libstdc++/libgcc so the runtime needs only glibc (distroless/cc has it)
+        g++ binutils libc6-dev linux-libc-dev strace && rm -rf /var/lib/apt/lists/*
+COPY oracle.cpp /src/oracle.cpp
 RUN g++ -std=c++23 -O2 -static-libstdc++ -static-libgcc \
         -o /oracle /src/oracle.cpp -lpthread
-# build-time proof: reflection must compile with the very toolchain we ship
-RUN printf '#include <meta>\nstatic_assert(^^int==^^int); using T=[:^^int:]; static_assert(__is_same(T,int));\nint main(){}\n' > /t.cpp \
-    && LD_LIBRARY_PATH=/opt/gcc-16.1/lib64 /opt/gcc-16.1/bin/g++ \
-         -std=c++26 -freflection -fsyntax-only /t.cpp
+COPY toolchain /opt/gcc-16.1
+RUN set -e; \
+    printf '#include <meta>\n#include <cstdio>\nstruct P{int x;double y;};\nconstexpr auto n=std::meta::nonstatic_data_members_of(^^P,std::meta::access_context::current()).size();\nstatic_assert(n==2);\nint main(){printf("%%zu",n);}\n' > /probe.cpp; \
+    export LD_LIBRARY_PATH=/opt/gcc-16.1/lib64; \
+    # trace a full compile+LINK+run — captures cc1plus, as, ld, crt, every .so
+    strace -f -e trace=openat,execve -o /tr.txt \
+      /opt/gcc-16.1/bin/g++ -std=c++26 -freflection /probe.cpp -o /a.out; \
+    /a.out; \
+    mkdir -p /out; cp /oracle /out/oracle; \
+    # exact toolchain/binutils/lib set actually touched (successful opens/execs)
+    { grep -oE '(execve\("|openat\([^,]*, ")(/opt|/usr/bin|/usr/lib|/lib)[^"]*"' /tr.txt \
+        | grep -oE '/(opt|usr|lib)[^"]*' | sed 's#^/lib/#/usr/lib/#'; } | sort -u \
+      | grep -vE 'ENOENT' | while read f; do \
+          [ -f "$f" ] && { mkdir -p "/out$(dirname "$f")"; cp -a "$f" "/out$f"; }; \
+        done; \
+    # headers wholesale (all of them) + kernel uapi the asm/* symlinks need
+    mkdir -p /out/usr/include /out/usr/lib/linux; \
+    cp -a /usr/include/. /out/usr/include/; \
+    cp -a /usr/lib/linux/. /out/usr/lib/linux/; \
+    echo "=== enlightened runtime tree:"; du -sh /out; \
+    echo "toolchain bins kept:"; find /out/usr/bin -type f | wc -l
 
 FROM gcr.io/distroless/cc-debian13
-COPY --from=build /oracle /oracle
-COPY --from=build /opt/gcc-16.1 /opt/gcc-16.1
-# ALL x64 + kernel headers, and the uapi tree the multiarch asm/* symlinks
-# point into (asm/errno.h -> ../../../lib/linux/uapi/...) — without the
-# latter those links dangle and standard includes fail
-COPY --from=build /usr/include /usr/include
-COPY --from=build /usr/lib/linux /usr/lib/linux
-# binutils (as, ld) + link objects — needed the moment run:true links
-COPY --from=build /usr/bin/as /usr/bin/ld /usr/bin/
-COPY --from=build /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+COPY --from=build /out /
 ENV ORACLE_PORT=8951
 EXPOSE 8951
 ENTRYPOINT ["/oracle"]
