@@ -12,30 +12,27 @@ Two images, one source:
   `asm/errno.h -> /usr/lib/linux/uapi/...`).
 - **`-light`** (`Dockerfile.light`, distroless): minimal, still trimming.
 
-## The honest benchmark (virre, vs the Python oracle1)
+## What the rewrite bought (measured, virre)
 
-| | oracle1 (python) | oracle2 (c++) |
+| | oracle1 (python) | oracle2-full (c++) |
 | --- | --- | --- |
+| **image** | **436 MB** | **316 MB** (-120 MB) |
+| runtime deps | python3 + stdlib + http.server | none beyond glibc |
 | trivial compile | 20.5 ms | 23.8 ms |
 | reflection compile | 185 ms | 193 ms |
 
-**The C++ rewrite did NOT make it faster** — the server language was never
-the bottleneck. Both fork the same g++; cc1plus doing the work dominates.
-Raw compiler floor (no server/network): trivial 3 ms, reflection 162 ms.
-Bypassing the g++ driver to invoke cc1plus directly saves only 12% on
-reflection.
+The win is **size and dependency surface**: -120 MB and Python entirely
+gone. The judge of C++ is now itself C++ - one static binary, no
+interpreter in the training-critical path. `-light` (distroless, trimming
+the copied `/usr/lib` to what cc1plus/as/ld actually need) targets
+~150-200 MB, roughly half the original.
 
-**Where real speed lives (untested):** a `<meta>` precompiled header baked
-into the image and force-included. Most of the 162 ms is re-parsing and
-re-instantiating the reflection header on every job; a PCH caches that.
-This — not the server language, not driver bypass — is the path to a
-meaningful speedup. See `docs/` before investing.
-
-## What oracle2 IS good for regardless of speed
-
-A dependency-free, interpreter-free, minimal artifact: the judge of C++ is
-itself C++, in one static binary. If "no Python in the training-critical
-path" is the goal, this delivers it. If speed is the goal, build the PCH.
+**Speed is at parity, not the point.** The few-ms differences are within
+LAN + fork noise; the server language was never the bottleneck (both fork
+the same g++; cc1plus dominates - raw floor 3 ms trivial, 162 ms
+reflection). The one real speed lever, if ever needed, is a `<meta>`
+precompiled header baked into the image - caching the 162 ms
+reflection-header parse - not another rewrite.
 
 ## API (identical to oracle1's core)
 
