@@ -34,6 +34,23 @@ reflection). The one real speed lever, if ever needed, is a `<meta>`
 precompiled header baked into the image - caching the 162 ms
 reflection-header parse - not another rewrite.
 
+## Why -light matters: the per-exec sandbox
+
+Throughput on a big box is parity (both ~1100 trivial jobs/s, both fork the
+same g++). The size win pays off in three fork-heavy regimes measurement on
+virre could not induce but the training workload will hit:
+
+- **memory headroom** — each concurrent cc1plus is ~100-200 MB RSS; on a
+  constrained node a leaner oracle fits more simultaneous forks before RAM
+  binds (where the throughput gap finally appears).
+- **replica density / distribution** — smaller ships faster to N nodes,
+  more replicas per host.
+- **the per-exec sandbox** — when `run` spawns a FRESH container per
+  execution, image size IS `docker run` spawn latency; x thousands of
+  reward-evals it compounds. `-light` is meant to BE that throwaway exec
+  base. Division of labor: `-full` = persistent server, `-light` = the
+  minimal sandbox spun up per exec.
+
 ## API (identical to oracle1's core)
 
     GET  /health   -> {ok, version, reflection, jobs_done}
